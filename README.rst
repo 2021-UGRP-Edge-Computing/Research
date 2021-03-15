@@ -42,12 +42,12 @@ Commands
 
 
 IP 관련 
-    :링크: https://github.com/2021-UGRP-Edge-Computing/Research/Commands#ip-address
+    :링크: https://github.com/2021-UGRP-Edge-Computing/Research/tree/main/Commands#ip-address
 +++++++
 
 
 Data Transmission
-    :링크: https://github.com/2021-UGRP-Edge-Computing/Research/Commands#data-transmission
+    :링크: https://github.com/2021-UGRP-Edge-Computing/Research/tree/main/Commands#data-transmission
 +++++++
 
 
