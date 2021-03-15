@@ -40,8 +40,16 @@ Commands
     Linux Terminal Command를 작성하고, 무엇에 관한 명령어인지 부연 설명을 넣습니다.
 
 
-비고
-++++
+
+IP 관련 
+    :링크: https://github.com/2021-UGRP-Edge-Computing/Research/Commands#ip-address
++++++++
+
+
+Data Transmission
+    :링크: https://github.com/2021-UGRP-Edge-Computing/Research/Commands#data-transmission
++++++++
+
 
 
 Errors
