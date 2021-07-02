@@ -18,4 +18,7 @@ mkdir -p build && cd build
 # Configure
 cmake  ../opencv-master
 
+# Build
+cmake --build .
+
 ```
