@@ -46,8 +46,8 @@ If your nano cannot find the path of nvcc, you should set the environment variab
 $ vim ~/.bashrc
 
 # add the following two lines after the last lines
-export PATH=/usr/local/cuda-10.0/bin${PATH:+:${PATH}}$ 
-export LD_LIBRARY_PATH=/usr/local/cuda-10.0/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+export PATH=/usr/local/cuda-10.2/bin${PATH:+:${PATH}}$ 
+export LD_LIBRARY_PATH=/usr/local/cuda-10.2/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
 
 
 # Log off and log on / or restart nano
