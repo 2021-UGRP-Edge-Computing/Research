@@ -21,3 +21,39 @@ $ cd build
 # Build, Compile & Execution 
 $ sh run.sh
 ```
+
+
+
+# OpenCV in Python with Jetson Nano
+## Import
+```
+import cv2
+```
+
+
+# Object Detection in Python with Jetson Nano
+
+## Setup
+
+First, check the nvcc version.
+```shell
+nvcc --version
+```
+
+If your nano cannot find the path of nvcc, you should set the environment variable for the nvcc.
+```shell
+# open terminal
+$ vim ~/.bashrc
+
+# add the following two lines after the last lines
+export PATH=/usr/local/cuda-10.0/bin${PATH:+:${PATH}}$ 
+export LD_LIBRARY_PATH=/usr/local/cuda-10.0/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+```
+
+## File Structure
+```
+darknet─ build ─ run.sh
+       ├ CMakeLists.txt
+       └ main.cpp
+
+```
