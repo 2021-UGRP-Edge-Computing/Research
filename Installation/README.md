@@ -72,3 +72,17 @@ $import tensorflow
 
 
 ```
+
+## Jetson_stats
+``` bash
+check out from https://github.com/rbonghi/jetson_stats
+
+
+#Install system packages required by TensorFlow:
+$sudo -H pip install -U jetson-stats
+
+and reboot the computer.
+
+Python usage check here : https://github.com/rbonghi/jetson_stats/wiki/library
+
+```
