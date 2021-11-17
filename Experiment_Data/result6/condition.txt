@@ -1,0 +1,11 @@
+Input image number: 1000
+Input time slot size:(float) 1.0
+Input time slot increasing size:(float)   4.0
+Input how many experimnet you perform with increasing time interval:( at least 1)  20
+How much time let nano take a rest to match temperature restriction: (int) 30
+input Heating time to match the cpu,gpu temperature limit: (int) 30
+input how many experimnet you perform with increasing cpu, gpu heating: 5
+Input inital cpu,gpt temperature increasing size:(float)  3.0
+init cpu temperature: 50
+init gpu temperature: 47
+Percentage that you expect from your partner's capablity for task: (100%) 1.0
