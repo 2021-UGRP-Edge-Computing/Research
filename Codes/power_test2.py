@@ -6,10 +6,10 @@ from jtop import jtop
 eta = 0
 i=0
 test_num=5
-heat_num=3
-gpu_test_num = 4
+heat_num=2
+gpu_test_num = 1
 
-mode_num=9    # 1 = corwork experiment, 2= no communication experiment, 3= inital tem increasing 4= same with 3 but more data , 7= dynamic model v1
+mode_num=10    # 1 = corwork experiment, 2= no communication experiment, 3= inital tem increasing 4= same with 3 but more data , 7= dynamic model v1
 time_period=1
 jetson = jtop()
 jetson.start()

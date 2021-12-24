@@ -1,44 +1,22 @@
 import argparse
+import multiprocessing
+import threading
 import os
 import glob
 import random
-import socket
+import darknet
 import time
 import cv2
 import numpy as np
 import darknet
-import pickle
+from multiprocessing import Process, Queue,Value,Array
+import sys, time, socket
+import subprocess
 from jtop import jtop
 
-def parser(): #yolov4
+def parser():
     parser = argparse.ArgumentParser(description="YOLO Object Detection")
-    parser.add_argument("--input", type=str, default="data/dog.jpg",
-                        help="image source. It can be a single image, a"
-                        "txt with paths to them, or a folder. Image valid"
-                        " formats are jpg, jpeg or png."
-                        "If no input is given, ")
-    parser.add_argument("--batch_size", default=1, type=int,
-                        help="number of images to be processed at the same time")
-    parser.add_argument("--weights", default="yolov4.weights",
-                        help="yolo weights path")
-    parser.add_argument("--dont_show", action='store_true',
-                        help="windown inference display. For headless systems")
-    parser.add_argument("--ext_output", action='store_true',
-                        help="display bbox coordinates of detected objects")
-    parser.add_argument("--save_labels", action='store_true',
-                        help="save detections bbox for each image in yolo format")
-    parser.add_argument("--config_file", default="./cfg/yolov4.cfg",
-                        help="path to config file")
-    parser.add_argument("--data_file", default="./cfg/coco.data",
-                        help="path to data file")
-    parser.add_argument("--thresh", type=float, default=.25,
-                        help="remove detections with lower confidence")
-    return parser.parse_args()
-
-
-def parser2(): #yolov4-tiny
-    parser = argparse.ArgumentParser(description="YOLO Object Detection")
-    parser.add_argument("--input", type=str, default="data/dog.jpg",
+    parser.add_argument("--input", type=str, default="lab/img_src/img",
                         help="image source. It can be a single image, a"
                         "txt with paths to them, or a folder. Image valid"
                         " formats are jpg, jpeg or png."
@@ -53,9 +31,9 @@ def parser2(): #yolov4-tiny
                         help="display bbox coordinates of detected objects")
     parser.add_argument("--save_labels", action='store_true',
                         help="save detections bbox for each image in yolo format")
-    parser.add_argument("--config_file", default="./cfg/yolov4-tiny.cfg",
+    parser.add_argument("--config_file", default="cfg/yolov4-tiny.cfg",
                         help="path to config file")
-    parser.add_argument("--data_file", default="./cfg/coco.data",
+    parser.add_argument("--data_file", default="cfg/coco.data",
                         help="path to data file")
     parser.add_argument("--thresh", type=float, default=.25,
                         help="remove detections with lower confidence")
@@ -142,21 +120,31 @@ def image_detection(image_path, network, class_names, class_colors, thresh):
     image = darknet.draw_boxes(detections, image_resized, class_colors)
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB), detections
 
-def my_image_detection(image, network, class_names, class_colors, thresh=.25):
+def image_detection2(image_path, network, class_names, class_colors, thresh,val,i_max,time_limit):
     # Darknet doesn't accept numpy images.
     # Create one with image we reuse for each detect
-    width = darknet.network_width(network)
-    height = darknet.network_height(network)
-    darknet_image = darknet.make_image(width, height, 3)
+    init_time = time.time()
+    init_val = int(val.value)
+    while(int(val.value) < i_max+1):
 
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image_resized = cv2.resize(image_rgb, (width, height),
-                               interpolation=cv2.INTER_LINEAR)
+        image = cv2.imread(image_path+str(int(val.value))+'.jpg',cv2.IMREAD_COLOR)
+        width = darknet.network_width(network)
+        height = darknet.network_height(network)
+        darknet_image = darknet.make_image(width, height, 3)
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_resized = cv2.resize(image_rgb, (width, height),
+                                        interpolation=cv2.INTER_LINEAR)
+        darknet.copy_image_from_bytes(darknet_image, image_resized.tobytes())
+        detections = darknet.detect_image(network, class_names, darknet_image, thresh=thresh)
+        darknet.free_image(darknet_image)
+        image = darknet.draw_boxes(detections, image_resized, class_colors)
+        val.value = val.value + 1
+        rate = (time.time()-init_time)/int(val.value-init_val)
+        if (time.time()-init_time)>(time_limit-rate):
+            break
 
-    darknet.copy_image_from_bytes(darknet_image, image_resized.tobytes())
-    detections = darknet.detect_image(network, class_names, darknet_image, thresh=thresh)
-    darknet.free_image(darknet_image)
-    return detections
+    return 0 
+       
 
 def batch_detection(network, images, class_names, class_colors,
                     thresh=0.25, hier_thresh=.5, nms=.45, batch_size=4):
@@ -204,7 +192,7 @@ def save_annotations(name, image, detections, class_names):
     """
     Files saved with image_name.txt and relative coordinates
     """
-    file_name = name.split(".")[:-1][0] + ".txt"
+    file_name = os.path.splitext(name)[0] + ".txt"
     with open(file_name, "w") as f:
         for label, confidence, bbox in detections:
             x, y, w, h = convert2relative(image, bbox)
@@ -231,6 +219,32 @@ def batch_detection_example():
         cv2.imwrite(name.replace("data/", ""), image)
     print(detections)
 
+
+def sendImage(sock, buff,img_index,img_number,time_limit): # Send (Communication) Core
+    # Inference and Sending Image List
+    init_time = time.time()
+    images = ["data/dog.jpg", "data/person.jpg"]  # for test
+
+    index = int(img_index.value)
+    image_path = images[index]
+    image = cv2.imread(image_path)
+
+   
+    for i in range(img_number):
+        #print(f"START: Offloading --- {i+1}")
+        # Basic Preprocessing
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+        result, imgencode = cv2.imencode(str(i+index)+'.jpg', image, encode_param)
+        data = np.array(imgencode)
+        stringData = data.tostring()
+
+        # Send Image
+        sock.send(str(len(stringData)).encode()) # send image size
+        sock.recv(buff)
+        sock.send(stringData) # send image file
+    return
+
+
 def recvall(sock, count):
     buf = b''
     while count:
@@ -240,55 +254,112 @@ def recvall(sock, count):
         count -= len(newbuf)
     return buf
 
+
+def receive(sock, buff,image_num): # learning core
+    f = open('server_bps.txt','w')
+    for i in range(image_num):
+        # Image Receive
+        start = time.time()
+        length = sock.recv(buff)
+        file_size = int(length)
+        
+        stringData = recvall(sock, file_size)
+        data = np.frombuffer(stringData, dtype='uint8')
+        decimg = cv2.imdecode(data, 1)
+        with open(f'temp/{i+1}.jpg', 'wb') as f:
+            f.write(stringData)
+        stop = time.time()
+        f.write(str(file_size/(stop-start))+" ")
+    f.close()
+    return
+
+
 def main():
-    ## MODEL LOAD
-    # yolov4
-    #args = parser() 
-    #check_arguments_errors(args)
-    #random.seed(3)  # deterministic bbox colors
+    #image_num=int(input("Input image number: "))
+    #time_interval=float(input("Input time slot size:(float) "))
+    #increase_t=float(input("Input time slot increasing size:(float) "))
+    #test_num = int(input("Input how many experimnet you perform with increasing time interval:( at least 1) "))
+    #sleep_time2=int(input("How much time let nano be free between each experiment: (int)"))
+    #cpulim = int(input("init cpu temperature:"))   
+    #gpulim = int(input("init gpu temperature:"))
+    #packet_size = float(input("Percentage that you expect from your partner's capablity for task: (least 100%) "))/100
+
+    #with open("lab/condition.txt",'w') as f:
+    #    f.write("Input image number: "+ str(image_num)+"\n"+
+    #    "Input time slot size:(float) "+ str(time_interval)+"\n"+
+    #    "Input time slot increasing size:(float)   "+ str(increase_t)+"\n"+
+    #    "Input how many experimnet you perform with increasing time interval:( at least 1)  "+ str(test_num)+"\n"+
+    #    "How much time let nano be free between each experiment: (int) "+ str(sleep_time2)+"\n"+
+    #    "init cpu temperature: "+ str(cpulim)+"\n"+
+    #    "init gpu temperature: "+ str(gpulim)+"\n"
+    #    )
     
-    # yolov4-tiny
-    args2 = parser2()
-    check_arguments_errors(args2)
+    SEPARATOR = "<SEPARATOR>"
+    BUFFER_SIZE = 4096 # send 4096 bytes each time step
+    # the ip address or hostname of the server, the receiver
+    #host = "192.168.0.5"
+    #host = "192.168.0.10" # LAN
+    host = "192.168.0.18" # wireless
+    #host = "127.0.0.1" # Local Host
+    port = 5000
 
-
-    # MODEL LOADING
+    args = parser()
+    check_arguments_errors(args)
+    random.seed(3)  # deterministic bbox colors
     network, class_names, class_colors = darknet.load_network(
-        args2.config_file,
-        args2.data_file,
-        args2.weights,
-        batch_size=args2.batch_size
+        args.config_file,
+        args.data_file,
+        args.weights,
+        batch_size=args.batch_size
     )
 
-    # IMAGE LOAD
-    #images = ['data/horses.jpg', 'data/horses.jpg', 'data/eagle.jpg', 'data/scream.jpg']  # for test
-    images = ['lab/img_src/img/big1.jpg', 'lab/img_src/img/big2.jpg', 'lab/img_src/img/big3.jpg', 'lab/img_src/img/big4.jpg']
-    # Image number which will be detected
-    num = 200
+    while(True):
+        try:
+            # connect
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind((host, port))
+            s.listen(50)
+            #print(f"[*] Listening as {host}:{port}")
 
-    jetson = jtop()
-    jetson.start()
+            client_socket, address = s.accept()
+            #print(f"[+] {address} is connected.")
+            result = Queue()
+            image_num = int(client_socket.recv(BUFFER_SIZE))
 
-    current = 0
-    index = 0    
-    for i in range(5):
-        t_time = time.time()
-        ct=jetson.temperature
-        print(f"CPU: {ct['CPU']} / GPU: {ct['GPU']} /", end = ' ', flush = True)
-        while current < num:
-            img_path = images[index]
-            image, detections = image_detection(
-                        img_path, network, class_names, class_colors, args2.thresh
-                        )
-            index = random.randint(0, 3)
-            current += 1
-        current = 0
-        print(f'FPS: {num/(time.time() - t_time)}')
-    jetson.close()
+            receive(client_socket, BUFFER_SIZE,image_num)
 
 
-if __name__ == '__main__':
-    main()
+        finally:
+            pass
         
+        detection_list=[0]*image_num
+    
+        #bool1=jetson.temperature['CPU'] > cpulim
+        #bool2=jetson.temperature['GPU'] > gpulim
+        #while(bool1 or bool2):
+        #    time.sleep(sleep_time2)
+        #    bool1=jetson.temperature['CPU'] > cpulim
+        #    bool2=jetson.temperature['GPU'] > gpulim
+
+        image_path='temp/'
+        processed_image_num=0
+
+        while(processed_image_num<image_num):
+            image, detections = image_detection(image_path+str(i+1)+".jpg", network, class_names, class_colors, args.thresh)
+            detection_list[processed_image_num]='@'.join(detections)
+            processed_image_num+=1
+        
+        for i in range(image_num):
+            client_socket.send(detection_list[i])
+        
+        for i in range(image_num):
+            os.remove(image_path+str(i+1)+'.jpg')
+        s.close()
+    return 1    
 
 
+
+if __name__ == "__main__":
+    # unconmment next line for an example of batch processing
+    # batch_detection_example()
+    main()

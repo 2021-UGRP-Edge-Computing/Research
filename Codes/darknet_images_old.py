@@ -1,42 +1,56 @@
 import argparse
+import multiprocessing
+import threading
 import os
 import glob
 import random
-import socket
+import darknet
 import time
 import cv2
 import numpy as np
 import darknet
-import pickle
+from multiprocessing import Process, Queue,Value,Array
+import sys, time, socket
+import subprocess
 from jtop import jtop
 
-def parser(): #yolov4
-    parser = argparse.ArgumentParser(description="YOLO Object Detection")
-    parser.add_argument("--input", type=str, default="data/dog.jpg",
-                        help="image source. It can be a single image, a"
-                        "txt with paths to them, or a folder. Image valid"
-                        " formats are jpg, jpeg or png."
-                        "If no input is given, ")
-    parser.add_argument("--batch_size", default=1, type=int,
-                        help="number of images to be processed at the same time")
-    parser.add_argument("--weights", default="yolov4.weights",
-                        help="yolo weights path")
-    parser.add_argument("--dont_show", action='store_true',
-                        help="windown inference display. For headless systems")
-    parser.add_argument("--ext_output", action='store_true',
-                        help="display bbox coordinates of detected objects")
-    parser.add_argument("--save_labels", action='store_true',
-                        help="save detections bbox for each image in yolo format")
-    parser.add_argument("--config_file", default="./cfg/yolov4.cfg",
-                        help="path to config file")
-    parser.add_argument("--data_file", default="./cfg/coco.data",
-                        help="path to data file")
-    parser.add_argument("--thresh", type=float, default=.25,
-                        help="remove detections with lower confidence")
-    return parser.parse_args()
+def recvall(sock, count):
+    buf = b''
+    while count:
+        newbuf = sock.recv(count)
+        if not newbuf: return None
+        buf += newbuf
+        count -= len(newbuf)
+    return buf
 
 
-def parser2(): #yolov4-tiny
+def receive(sock, buff): # learning core
+	
+	#Inference Image List	
+	#images = ["data/dog.jpg", "data/person.jpg"]
+
+	for i in range(10):
+		# Image Receive
+		start = time.time()
+		length = sock.recv(buff)
+		file_size = int(length)
+		sock.send('OK'.encode())
+
+		stringData = recvall(sock, file_size)
+		
+		data = np.frombuffer(stringData, dtype='uint8')
+		decimg = cv2.imdecode(data, 1)
+		# Image Inference
+		with open(f'data/{i+1}.jpg', 'wb') as f:
+			f.write(stringData)
+
+		stop = time.time()
+		
+		print(f"DONE -- RECEIVE -- {file_size/(stop-start)}")
+	return
+
+
+def parser():
     parser = argparse.ArgumentParser(description="YOLO Object Detection")
     parser.add_argument("--input", type=str, default="data/dog.jpg",
                         help="image source. It can be a single image, a"
@@ -142,21 +156,32 @@ def image_detection(image_path, network, class_names, class_colors, thresh):
     image = darknet.draw_boxes(detections, image_resized, class_colors)
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB), detections
 
-def my_image_detection(image, network, class_names, class_colors, thresh=.25):
+def image_detection2(image_path, network, class_names, class_colors, thresh,val,i_max,time_limit):
     # Darknet doesn't accept numpy images.
     # Create one with image we reuse for each detect
-    width = darknet.network_width(network)
-    height = darknet.network_height(network)
-    darknet_image = darknet.make_image(width, height, 3)
+    init_time = time.time()
+    init_val = int(val.value)
+    while(int(val.value) < i_max+1):
 
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image_resized = cv2.resize(image_rgb, (width, height),
-                               interpolation=cv2.INTER_LINEAR)
+        image = cv2.imread(image_path+str(int(val.value))+'.jpg',cv2.IMREAD_COLOR)
+        width = darknet.network_width(network)
+        height = darknet.network_height(network)
+        darknet_image = darknet.make_image(width, height, 3)
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_resized = cv2.resize(image_rgb, (width, height),
+                                        interpolation=cv2.INTER_LINEAR)
+        darknet.copy_image_from_bytes(darknet_image, image_resized.tobytes())
+        detections = darknet.detect_image(network, class_names, darknet_image, thresh=thresh)
+        darknet.free_image(darknet_image)
+        image = darknet.draw_boxes(detections, image_resized, class_colors)
+        val.value = val.value + 1
+        rate = (time.time()-init_time)/int(val.value-init_val)
+        if (time.time()-init_time)>(time_limit-rate):
+            break
 
-    darknet.copy_image_from_bytes(darknet_image, image_resized.tobytes())
-    detections = darknet.detect_image(network, class_names, darknet_image, thresh=thresh)
-    darknet.free_image(darknet_image)
-    return detections
+    return 0 
+       
+
 
 def batch_detection(network, images, class_names, class_colors,
                     thresh=0.25, hier_thresh=.5, nms=.45, batch_size=4):
@@ -204,7 +229,7 @@ def save_annotations(name, image, detections, class_names):
     """
     Files saved with image_name.txt and relative coordinates
     """
-    file_name = name.split(".")[:-1][0] + ".txt"
+    file_name = os.path.splitext(name)[0] + ".txt"
     with open(file_name, "w") as f:
         for label, confidence, bbox in detections:
             x, y, w, h = convert2relative(image, bbox)
@@ -231,64 +256,118 @@ def batch_detection_example():
         cv2.imwrite(name.replace("data/", ""), image)
     print(detections)
 
-def recvall(sock, count):
-    buf = b''
-    while count:
-        newbuf = sock.recv(count)
-        if not newbuf: return None
-        buf += newbuf
-        count -= len(newbuf)
-    return buf
 
 def main():
-    ## MODEL LOAD
-    # yolov4
-    #args = parser() 
-    #check_arguments_errors(args)
-    #random.seed(3)  # deterministic bbox colors
-    
-    # yolov4-tiny
-    args2 = parser2()
-    check_arguments_errors(args2)
+    #multiprocessing.set_start_method('spawn')
+    image_num=int(input("Input image number: "))
+    time_interval=float(input("Input time slot size:(float) "))
+    increase_t=float(input("Input time slot increasing size:(float) "))
+    test_num = int(input("Input how many experimnet you perform with increasing time interval:( at least 1) "))
+    sleep_time2=int(input("How much time sleep to lower temperature: (int)"))
+    cpulim = int(input("init cpu temperature:"))   
+    gpulim = int(input("init gpu temperature:"))
+    args = parser()
+    check_arguments_errors(args)
 
-
-    # MODEL LOADING
+    random.seed(3)  # deterministic bbox colors
     network, class_names, class_colors = darknet.load_network(
-        args2.config_file,
-        args2.data_file,
-        args2.weights,
-        batch_size=args2.batch_size
+        args.config_file,
+        args.data_file,
+        args.weights,
+        batch_size=args.batch_size
     )
-
-    # IMAGE LOAD
-    #images = ['data/horses.jpg', 'data/horses.jpg', 'data/eagle.jpg', 'data/scream.jpg']  # for test
-    images = ['lab/img_src/img/big1.jpg', 'lab/img_src/img/big2.jpg', 'lab/img_src/img/big3.jpg', 'lab/img_src/img/big4.jpg']
-    # Image number which will be detected
-    num = 200
+    
+    experiment_x_avg_fps=[]
+    #experiment_x_avg_gpu_load=[]
+    time_interval_list = []
+    for i in range(test_num):
+        time_interval_list.append(time_interval+i*increase_t)
 
     jetson = jtop()
     jetson.start()
+    
+    for i in range(test_num):
+        bool1=jetson.temperature['CPU'] > cpulim
+        bool2=jetson.temperature['GPU'] > gpulim
+        while(bool1 or bool2):
+             time.sleep(sleep_time2)
+             bool1=jetson.temperature['CPU'] > cpulim
+             bool2=jetson.temperature['GPU'] > gpulim
 
-    current = 0
-    index = 0    
-    for i in range(5):
-        t_time = time.time()
-        ct=jetson.temperature
-        print(f"CPU: {ct['CPU']} / GPU: {ct['GPU']} /", end = ' ', flush = True)
-        while current < num:
-            img_path = images[index]
-            image, detections = image_detection(
-                        img_path, network, class_names, class_colors, args2.thresh
-                        )
-            index = random.randint(0, 3)
-            current += 1
-        current = 0
-        print(f'FPS: {num/(time.time() - t_time)}')
-    jetson.close()
+        accident_fps = []
+        accident_time = [0]
+        #gpu_load=[]
+        history=1
+        val= Value('d',1.0)
+        processed_image_num=0
+        image_path='lab/img_src/img/'
+        zero_time = time.time()
 
+        x=1
+        while(True):
+            #cv2.imshow(image_path+str(history)+'.jpg',image)
+            #t = threading.Thread(target=image_detection2,name="if",args= (image_path, network, class_names, class_colors, args.thresh,val,image_num,time_interval_list[i]))
+            prev_time = time.time()
+            image_detection2(image_path, network, class_names, class_colors,args.thresh,val,image_num,time_interval_list[i])
+            #t.start()
+            #prev_time = time.time()
+            #t.join(timeout=time_interval_list[i])
+            #t.join()
+            #while(t.isAlive()):
+            #    pp=0
+            #print(val.value)
+            #gpu_load.append(jetson.gpu['val'])
+            ## Check the inferencing was successful.
+            end_time = time.time()
 
-if __name__ == '__main__':
-    main()
+            accident_fps.append((int(val.value) - history)/(end_time - prev_time))
+            accident_time.append(accident_time[len(accident_time)-1]+end_time - prev_time)
+            
+            if int(val.value) > history:
+                processed_image_num = processed_image_num + int(val.value) - history
+                history = int(val.value)
+            else:
+                val.value = val.value + 1
+                histroy = int(val.value)
+            ## Check if all image were inferenced.
+            if history >image_num:
+                break
+
+        experiment_x_avg_fps.append(processed_image_num/(time.time() - zero_time))
+        #experiment_x_avg_gpu_load.append(sum(gpu_load)/len(gpu_load))
+
+        accid_ff = open("lab/result/accident_fps_list" + str(i+1)+".txt",'w')
+        for j in accident_fps:
+            accid_ff.write(str(j)+" ")
+        accid_ff.close()
+
+        accid_tf = open("lab/result/accident_time_list" + str(i+1)+".txt",'w')
+        for j in accident_time:
+            accid_tf.write(str(j)+" ")
+        accid_tf.close()
+
         
+    jetson.close()     
+    tslist_file = open("lab/result/Time_interval_list1.txt",'w')
+    for j in time_interval_list:
+        tslist_file.write(str(j)+" ")
+    tslist_file.close()
+
+    #gpulist_file = open("lab/result/Gpuload_list1.txt",'w')
+    #for j in experiment_x_avg_gpu_load:
+    #    gpulist_file.write(str(j)+" ")
+    #gpulist_file.close() 
+
+    fpslist_file = open("lab/result/Fps_list1.txt",'w')
+    for j in experiment_x_avg_fps:
+        fpslist_file.write(str(j)+" ")
+    fpslist_file.close()
+    
+    return 1    
 
 
+
+if __name__ == "__main__":
+    # unconmment next line for an example of batch processing
+    # batch_detection_example()
+    main()
